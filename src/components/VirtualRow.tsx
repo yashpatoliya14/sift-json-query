@@ -1,14 +1,24 @@
 import type { RowComponentProps } from "react-window";
 import { JsonNode } from "@/components/JsonNode";
-import type { MatchHit, TreeNode } from "@/lib/types";
+import type { SearchScope, TreeNode } from "@/lib/types";
+
+export interface MatchQuery {
+  query: string;
+  scope: SearchScope;
+  caseSensitive: boolean;
+  regex: boolean;
+}
 
 export interface RowData {
   rows: TreeNode[];
-  hits: Map<string, MatchHit>;
-  expanded: Set<string>;
-  activePath: string | null;
+  /** 1 when the node at that flat index is a search hit */
+  matched: Uint8Array;
+  /** 1 when the container at that flat index is expanded */
+  expanded: Uint8Array;
+  activeNode: number;
   copiedPath: string | null;
-  onToggle: (path: string, deep: boolean) => void;
+  match: MatchQuery | null;
+  onToggle: (index: number, deep: boolean) => void;
   onCopyPath: (path: string) => void;
 }
 
@@ -16,10 +26,11 @@ export function VirtualRow({
   index,
   style,
   rows,
-  hits,
+  matched,
   expanded,
-  activePath,
+  activeNode,
   copiedPath,
+  match,
   onToggle,
   onCopyPath,
 }: RowComponentProps<RowData>) {
@@ -28,9 +39,9 @@ export function VirtualRow({
     <div style={style}>
       <JsonNode
         node={node}
-        hit={hits.get(node.path)}
-        isActive={activePath === node.path}
-        isExpanded={expanded.has(node.path)}
+        match={matched[node.i] === 1 ? match : null}
+        isActive={activeNode === node.i}
+        isExpanded={expanded[node.i] === 1}
         copied={copiedPath === node.path}
         onToggle={onToggle}
         onCopyPath={onCopyPath}

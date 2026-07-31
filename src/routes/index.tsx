@@ -10,12 +10,15 @@ import { SqlConsole } from "@/components/SqlConsole";
 import { StatStrip } from "@/components/StatStrip";
 import { TreePanel } from "@/components/TreePanel";
 import { DatabaseIcon, TreeIcon } from "@/components/icons";
-import { ancestorsOf, buildNodes, computeStats, visibleRows } from "@/lib/flattenTree";
-import { copyText, findRanges, rawText } from "@/lib/jsonTools";
+import { buildNodes, computeStats, visibleRows } from "@/lib/flattenTree";
+import { copyText } from "@/lib/jsonTools";
 import { looksLikeMongo, parseMongo, runMongo, toSqlWhere } from "@/lib/mongoSearch";
 import { SAMPLE_JSON } from "@/lib/sampleData";
+import { buildSearchIndex, expandAncestors, scanIndex } from "@/lib/searchIndex";
+import type { ScanOptions, SearchIndex } from "@/lib/searchIndex";
 import { cn } from "@/lib/utils";
-import type { JsonValue, MatchHit, SearchResult, SearchScope, TreeNode } from "@/lib/types";
+import type { MatchQuery } from "@/components/VirtualRow";
+import type { JsonValue, SearchResult, SearchScope } from "@/lib/types";
 
 export const Route = createFileRoute("/")({
   head: () => ({
@@ -39,7 +42,21 @@ export const Route = createFileRoute("/")({
   component: Sift,
 });
 
-const EMPTY: SearchResult = { hits: [], ms: 0, error: null, translated: null };
+const NO_HITS = new Int32Array(0);
+const EMPTY: SearchResult = {
+  hits: NO_HITS,
+  truncated: false,
+  ms: 0,
+  error: null,
+  translated: null,
+};
+
+interface ScanCache {
+  query: string;
+  key: string;
+  hits: Int32Array;
+  truncated: boolean;
+}
 
 function Sift() {
   const [text, setText] = useState("");
@@ -53,56 +70,65 @@ function Sift() {
   const [caseSensitive, setCaseSensitive] = useState(false);
   const [regex, setRegex] = useState(false);
 
-  const [expanded, setExpanded] = useState<Set<string>>(new Set());
+  const [expanded, setExpanded] = useState<Uint8Array>(() => new Uint8Array(0));
   const [activeIndex, setActiveIndex] = useState(0);
   const [copiedPath, setCopiedPath] = useState<string | null>(null);
   const [tab, setTab] = useState<"tree" | "sql">("tree");
 
   const listRef = useRef<ListImperativeAPI>(null);
+  const cacheRef = useRef<ScanCache | null>(null);
 
   const nodes = useMemo(() => (doc === null ? [] : buildNodes(doc)), [doc]);
-  const nodeIndex = useMemo(() => new Map(nodes.map((n) => [n.path, n])), [nodes]);
+  const index = useMemo(() => buildSearchIndex(nodes), [nodes]);
   const stats = useMemo(() => computeStats(nodes, bytes), [nodes, bytes]);
 
   useEffect(() => {
-    const id = setTimeout(() => setDebounced(query), 140);
+    const id = setTimeout(() => setDebounced(query), 120);
     return () => clearTimeout(id);
   }, [query]);
 
+  useEffect(() => {
+    cacheRef.current = null;
+  }, [index]);
+
   const search = useMemo<SearchResult>(
-    () => runSearch(nodes, debounced, { scope, caseSensitive, regex }),
-    [nodes, debounced, scope, caseSensitive, regex],
+    () => runSearch(index, nodes.length, debounced, { scope, caseSensitive, regex }, cacheRef),
+    [index, nodes.length, debounced, scope, caseSensitive, regex],
   );
-  const active = search.hits[activeIndex] ?? null;
-  const hitMap = useMemo(() => new Map(search.hits.map((h) => [h.path, h])), [search.hits]);
+
+  const matched = useMemo(() => {
+    const mask = new Uint8Array(index.size);
+    for (let i = 0; i < search.hits.length; i++) mask[search.hits[i]] = 1;
+    return mask;
+  }, [search.hits, index.size]);
+
+  const activeNode = activeIndex < search.hits.length ? search.hits[activeIndex] : -1;
+
+  const matchQuery = useMemo<MatchQuery | null>(
+    () => (debounced.trim() ? { query: debounced, scope, caseSensitive, regex } : null),
+    [debounced, scope, caseSensitive, regex],
+  );
 
   // Reveal every match: ancestors of hits are expanded automatically.
   useEffect(() => {
     if (search.hits.length === 0) return;
     setExpanded((prev) => {
-      const next = new Set(prev);
-      let changed = false;
-      for (const hit of search.hits) {
-        for (const a of ancestorsOf(hit.path, nodeIndex)) {
-          if (!next.has(a)) {
-            next.add(a);
-            changed = true;
-          }
-        }
-      }
-      return changed ? next : prev;
+      const next = new Uint8Array(prev);
+      return expandAncestors(index, search.hits, next) ? next : prev;
     });
     setActiveIndex((i) => (i < search.hits.length ? i : 0));
-  }, [search.hits, nodeIndex]);
+  }, [search.hits, index]);
 
   const rows = useMemo(() => visibleRows(nodes, expanded), [nodes, expanded]);
 
   // Keep the active match in view.
   useEffect(() => {
-    if (!active || tab !== "tree") return;
-    const index = rows.findIndex((r) => r.path === active.path);
-    if (index >= 0) listRef.current?.scrollToRow({ index, align: "smart", behavior: "auto" });
-  }, [active, rows, tab]);
+    if (activeNode < 0 || tab !== "tree") return;
+    const target = nodes[activeNode];
+    if (!target) return;
+    const at = rows.findIndex((r) => r.i === target.i);
+    if (at >= 0) listRef.current?.scrollToRow({ index: at, align: "smart", behavior: "auto" });
+  }, [activeNode, rows, tab, nodes]);
 
   const apply = useCallback((raw: string) => {
     if (!raw.trim()) {
@@ -111,11 +137,13 @@ function Sift() {
     }
     try {
       const parsed = JSON.parse(raw) as JsonValue;
+      const built = buildNodes(parsed);
       setDoc(parsed);
       setBytes(new Blob([raw]).size);
       setParseError(null);
-      const initial = buildNodes(parsed).filter((n) => n.isContainer && n.depth <= 1);
-      setExpanded(new Set(initial.map((n) => n.path)));
+      const mask = new Uint8Array(built.length);
+      for (const n of built) if (n.isContainer && n.depth <= 1) mask[n.i] = 1;
+      setExpanded(mask);
       setActiveIndex(0);
     } catch (e) {
       setParseError(`Invalid JSON — ${(e as Error).message}`);
@@ -123,25 +151,24 @@ function Sift() {
   }, []);
 
   const toggle = useCallback(
-    (path: string, deep: boolean) => {
+    (nodeIdx: number, deep: boolean) => {
       setExpanded((prev) => {
-        const next = new Set(prev);
-        const node = nodeIndex.get(path);
-        const opening = !next.has(path);
-        if (deep && node) {
-          const start = nodes.indexOf(node);
-          for (let i = start; i < node.end; i++) {
-            const child = nodes[i];
-            if (!child.isContainer) continue;
-            if (opening) next.add(child.path);
-            else next.delete(child.path);
+        const next = new Uint8Array(prev);
+        const node = nodes[nodeIdx];
+        if (!node) return prev;
+        const opening = next[nodeIdx] !== 1;
+        if (deep) {
+          for (let i = nodeIdx; i < node.end; i++) {
+            if (!nodes[i].isContainer) continue;
+            next[i] = opening ? 1 : 0;
           }
-        } else if (opening) next.add(path);
-        else next.delete(path);
+        } else {
+          next[nodeIdx] = opening ? 1 : 0;
+        }
         return next;
       });
     },
-    [nodeIndex, nodes],
+    [nodes],
   );
 
   const copyPath = useCallback(async (path: string) => {
@@ -152,8 +179,9 @@ function Sift() {
 
   const step = useCallback(
     (delta: number) => {
-      if (search.hits.length === 0) return;
-      setActiveIndex((i) => (i + delta + search.hits.length) % search.hits.length);
+      const total = search.hits.length;
+      if (total === 0) return;
+      setActiveIndex((i) => (i + delta + total) % total);
     },
     [search.hits.length],
   );
@@ -169,7 +197,7 @@ function Sift() {
     setBytes(0);
     setParseError(null);
     setQuery("");
-    setExpanded(new Set());
+    setExpanded(new Uint8Array(0));
   };
 
   return (
@@ -187,8 +215,8 @@ function Sift() {
             error={parseError}
           />
           <MatchLedger
+            nodes={nodes}
             hits={search.hits}
-            nodeIndex={nodeIndex}
             activeIndex={activeIndex}
             onSelect={setActiveIndex}
             hasQuery={!!debounced}
@@ -227,10 +255,11 @@ function Sift() {
                 <TreePanel
                   listRef={listRef}
                   rows={rows}
-                  hits={hitMap}
+                  matched={matched}
                   expanded={expanded}
-                  activePath={active?.path ?? null}
+                  activeNode={activeNode}
                   copiedPath={copiedPath}
+                  match={matchQuery}
                   onToggle={toggle}
                   onCopyPath={copyPath}
                 />
@@ -276,24 +305,26 @@ function Tab({
 }
 
 function runSearch(
-  nodes: TreeNode[],
+  index: SearchIndex,
+  nodeCount: number,
   query: string,
-  opts: { scope: SearchScope; caseSensitive: boolean; regex: boolean },
+  opts: ScanOptions,
+  cacheRef: React.MutableRefObject<ScanCache | null>,
 ): SearchResult {
-  if (!query.trim() || nodes.length === 0) return EMPTY;
+  if (!query.trim() || nodeCount === 0) {
+    cacheRef.current = null;
+    return EMPTY;
+  }
   const started = performance.now();
 
   if (looksLikeMongo(query)) {
     try {
       const parsed = parseMongo(query);
-      const matched = runMongo(nodes, parsed);
-      const hits: MatchHit[] = matched.map((n) => ({
-        path: n.path,
-        keyRanges: [{ start: 0, end: n.key.length }],
-        valueRanges: [{ start: 0, end: rawText(n).length }],
-      }));
+      const hits = Int32Array.from(runMongo(index, parsed));
+      cacheRef.current = null;
       return {
         hits,
+        truncated: false,
         ms: performance.now() - started,
         error: null,
         translated: toSqlWhere(parsed),
@@ -304,15 +335,26 @@ function runSearch(
   }
 
   try {
-    const hits: MatchHit[] = [];
-    for (const node of nodes) {
-      const keyRanges =
-        opts.scope === "values" ? [] : findRanges(node.key, query, opts);
-      const valueRanges =
-        opts.scope === "keys" || node.isContainer ? [] : findRanges(rawText(node), query, opts);
-      if (keyRanges.length || valueRanges.length) hits.push({ path: node.path, keyRanges, valueRanges });
-    }
-    return { hits, ms: performance.now() - started, error: null, translated: null };
+    const key = `${opts.scope}|${opts.caseSensitive}|${opts.regex}`;
+    const cache = cacheRef.current;
+    // Typing forward only ever narrows a substring search — rescan just the
+    // previous hits instead of the whole document.
+    const canNarrow =
+      !opts.regex &&
+      cache !== null &&
+      cache.key === key &&
+      !cache.truncated &&
+      query.length > cache.query.length &&
+      query.startsWith(cache.query);
+
+    const { indices, truncated } = scanIndex(
+      index,
+      query,
+      opts,
+      canNarrow ? cache!.hits : undefined,
+    );
+    cacheRef.current = { query, key, hits: indices, truncated };
+    return { hits: indices, truncated, ms: performance.now() - started, error: null, translated: null };
   } catch (e) {
     return { ...EMPTY, error: `Invalid pattern — ${(e as Error).message}` };
   }

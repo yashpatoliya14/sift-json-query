@@ -1,16 +1,25 @@
 import { rawText } from "@/lib/jsonTools";
 import { cn } from "@/lib/utils";
-import type { MatchHit, TreeNode } from "@/lib/types";
+import type { TreeNode } from "@/lib/types";
 
 interface Props {
-  hits: MatchHit[];
-  nodeIndex: Map<string, TreeNode>;
+  nodes: TreeNode[];
+  hits: Int32Array;
   activeIndex: number;
   onSelect: (index: number) => void;
   hasQuery: boolean;
 }
 
-export function MatchLedger({ hits, nodeIndex, activeIndex, onSelect, hasQuery }: Props) {
+/** Only a window of hits is ever mounted — huge result sets stay cheap. */
+const RENDER_LIMIT = 300;
+
+export function MatchLedger({ nodes, hits, activeIndex, onSelect, hasQuery }: Props) {
+  const start = Math.max(0, Math.min(activeIndex - 40, hits.length - RENDER_LIMIT));
+  const from = Math.max(0, start);
+  const to = Math.min(hits.length, from + RENDER_LIMIT);
+  const window: number[] = [];
+  for (let i = from; i < to; i++) window.push(i);
+
   return (
     <section className="flex min-h-0 flex-1 flex-col">
       <div className="flex items-center justify-between px-3 py-2">
@@ -30,11 +39,11 @@ export function MatchLedger({ hits, nodeIndex, activeIndex, onSelect, hasQuery }
           <p className="px-3 py-3 font-mono text-[11px] text-t-null">No matches in this document.</p>
         )}
         <ul>
-          {hits.map((hit, i) => {
-            const node = nodeIndex.get(hit.path);
+          {window.map((i) => {
+            const node = nodes[hits[i]];
             if (!node) return null;
             return (
-              <li key={hit.path}>
+              <li key={node.path}>
                 <button
                   type="button"
                   onClick={() => onSelect(i)}
@@ -45,7 +54,7 @@ export function MatchLedger({ hits, nodeIndex, activeIndex, onSelect, hasQuery }
                       : "hover:bg-panel-raised",
                   )}
                 >
-                  <span className="block truncate text-muted-foreground">{hit.path}</span>
+                  <span className="block truncate text-muted-foreground">{node.path}</span>
                   <span className="mt-0.5 flex gap-1.5 truncate">
                     <span className="text-brass">{node.key}</span>
                     <span className="truncate text-t-string">
@@ -57,6 +66,11 @@ export function MatchLedger({ hits, nodeIndex, activeIndex, onSelect, hasQuery }
             );
           })}
         </ul>
+        {hits.length > window.length && (
+          <p className="px-3 py-2 font-mono text-[10px] text-t-null">
+            showing {from + 1}–{to} of {hits.length} — step through to see more
+          </p>
+        )}
       </div>
     </section>
   );

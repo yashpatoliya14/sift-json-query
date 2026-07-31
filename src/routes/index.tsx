@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import { createFileRoute } from "@tanstack/react-router";
 import type { ListImperativeAPI } from "react-window";
 
@@ -10,15 +10,23 @@ import { SqlConsole } from "@/components/SqlConsole";
 import { StatStrip } from "@/components/StatStrip";
 import { TreePanel } from "@/components/TreePanel";
 import { DatabaseIcon, TreeIcon } from "@/components/icons";
-import { buildNodes, computeStats, visibleRows } from "@/lib/flattenTree";
 import { copyText, rawText } from "@/lib/jsonTools";
-import { looksLikeMongo, parseMongo, runMongo, toSqlWhere } from "@/lib/mongoSearch";
 import { SAMPLE_JSON } from "@/lib/sampleData";
-import { buildSearchIndex, expandAncestors, scanIndex } from "@/lib/searchIndex";
-import type { ScanOptions, SearchIndex } from "@/lib/searchIndex";
+import {
+  activeRowPosition,
+  clearDocument,
+  getState,
+  getVersion,
+  loadDocument,
+  runSearch,
+  setActiveIndex,
+  stepActive,
+  subscribe,
+  toggleNode,
+} from "@/lib/docStore";
 import { cn } from "@/lib/utils";
 import type { MatchQuery, RowData } from "@/components/VirtualRow";
-import type { JsonValue, SearchResult, SearchScope, TreeNode } from "@/lib/types";
+import type { SearchScope } from "@/lib/types";
 
 export const Route = createFileRoute("/")({
   head: () => ({
@@ -42,95 +50,74 @@ export const Route = createFileRoute("/")({
   component: Sift,
 });
 
-const NO_HITS = new Int32Array(0);
 const LEDGER_WINDOW = 200;
-const EMPTY: SearchResult = {
-  hits: NO_HITS,
-  truncated: false,
-  ms: 0,
-  error: null,
-  translated: null,
-};
-
-interface ScanCache {
-  query: string;
-  key: string;
-  hits: Int32Array;
-  truncated: boolean;
-}
 
 function Sift() {
-  const [text, setText] = useState("");
-  const [doc, setDoc] = useState<JsonValue | null>(null);
-  const [bytes, setBytes] = useState(0);
-  const [parseError, setParseError] = useState<string | null>(null);
+  // Only a version counter crosses into React — bulk data stays in the store.
+  const version = useSyncExternalStore(subscribe, getVersion, getVersion);
+  const store = getState();
 
+  const [text, setText] = useState("");
   const [query, setQuery] = useState("");
-  const [debounced, setDebounced] = useState("");
   const [scope, setScope] = useState<SearchScope>("both");
   const [caseSensitive, setCaseSensitive] = useState(false);
   const [regex, setRegex] = useState(false);
-
-  const [expanded, setExpanded] = useState<Uint8Array>(() => new Uint8Array(0));
-  const [activeIndex, setActiveIndex] = useState(0);
   const [copiedPath, setCopiedPath] = useState<string | null>(null);
   const [tab, setTab] = useState<"tree" | "sql">("tree");
 
   const listRef = useRef<ListImperativeAPI>(null);
-  const cacheRef = useRef<ScanCache | null>(null);
 
-  const nodes = useMemo(() => (doc === null ? [] : buildNodes(doc)), [doc]);
-  const index = useMemo(() => buildSearchIndex(nodes), [nodes]);
-  const stats = useMemo(() => computeStats(nodes, bytes), [nodes, bytes]);
+  const trimmed = query.trim();
 
+  // Debounced search — the scan itself is a few ms even on 100k nodes.
   useEffect(() => {
-    const id = setTimeout(() => setDebounced(query), 120);
+    const id = setTimeout(() => runSearch(query, { scope, caseSensitive, regex }), 90);
     return () => clearTimeout(id);
-  }, [query]);
-
-  useEffect(() => {
-    cacheRef.current = null;
-  }, [index]);
-
-  const search = useMemo<SearchResult>(
-    () => runSearch(index, nodes, debounced, { scope, caseSensitive, regex }, cacheRef),
-    [index, nodes, debounced, scope, caseSensitive, regex],
-  );
-
-  const matched = useMemo(() => {
-    const mask = new Uint8Array(index.size);
-    for (let i = 0; i < search.hits.length; i++) mask[search.hits[i]] = 1;
-    return mask;
-  }, [search.hits, index.size]);
-
-  const activeNode = activeIndex < search.hits.length ? search.hits[activeIndex] : -1;
+  }, [query, scope, caseSensitive, regex]);
 
   const matchQuery = useMemo<MatchQuery | null>(
-    () => (debounced.trim() ? { query: debounced, scope, caseSensitive, regex } : null),
-    [debounced, scope, caseSensitive, regex],
+    () => (trimmed ? { query, scope, caseSensitive, regex } : null),
+    [trimmed, query, scope, caseSensitive, regex],
   );
 
-  // Reveal every match: ancestors of hits are expanded automatically.
-  useEffect(() => {
-    if (search.hits.length === 0) return;
-    setExpanded((prev) => {
-      const next = new Uint8Array(prev);
-      return expandAncestors(index, search.hits, next) ? next : prev;
-    });
-    setActiveIndex((i) => (i < search.hits.length ? i : 0));
-  }, [search.hits, index]);
+  const copyPath = useCallback(async (path: string) => {
+    await copyText(path);
+    setCopiedPath(path);
+    setTimeout(() => setCopiedPath((p) => (p === path ? null : p)), 1200);
+  }, []);
 
-  const rows = useMemo(() => visibleRows(nodes, expanded), [nodes, expanded]);
+  const dataRef = useRef<RowData>({
+    rows: [],
+    matched: new Uint8Array(0),
+    expanded: new Uint8Array(0),
+    activeNode: -1,
+    copiedPath: null,
+    match: null,
+    onToggle: toggleNode,
+    onCopyPath: copyPath,
+  });
+  dataRef.current = {
+    rows: store.rows,
+    matched: store.matched,
+    expanded: store.expanded,
+    activeNode: store.activeIndex < store.hits.length ? store.hits[store.activeIndex] : -1,
+    copiedPath,
+    match: matchQuery,
+    onToggle: toggleNode,
+    onCopyPath: copyPath,
+  };
+  const readTreeData = useCallback(() => dataRef.current, []);
 
-  // Only a small window of hits is ever handed to the ledger.
+  // Small, bounded slice of hits for the ledger.
   const ledgerItems = useMemo<LedgerItem[]>(() => {
-    const total = search.hits.length;
+    const s = getState();
+    const total = s.hits.length;
     if (total === 0) return [];
-    const from = Math.max(0, Math.min(activeIndex - 40, total - LEDGER_WINDOW));
+    const from = Math.max(0, Math.min(s.activeIndex - 40, total - LEDGER_WINDOW));
     const to = Math.min(total, from + LEDGER_WINDOW);
     const out: LedgerItem[] = [];
     for (let i = from; i < to; i++) {
-      const node = nodes[search.hits[i]];
+      const node = s.nodes[s.hits[i]];
       if (!node) continue;
       out.push({
         index: i,
@@ -140,121 +127,51 @@ function Sift() {
       });
     }
     return out;
-  }, [search.hits, activeIndex, nodes]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [version]);
 
   // Keep the active match in view.
   useEffect(() => {
-    if (activeNode < 0 || tab !== "tree") return;
-    const target = nodes[activeNode];
-    if (!target) return;
-    const at = rows.findIndex((r) => r.i === target.i);
+    if (tab !== "tree") return;
+    const at = activeRowPosition();
     if (at >= 0) listRef.current?.scrollToRow({ index: at, align: "smart", behavior: "auto" });
-  }, [activeNode, rows, tab, nodes]);
-
-  const apply = useCallback((raw: string) => {
-    if (!raw.trim()) {
-      setParseError("Nothing to parse yet.");
-      return;
-    }
-    try {
-      const parsed = JSON.parse(raw) as JsonValue;
-      const built = buildNodes(parsed);
-      setDoc(parsed);
-      setBytes(new Blob([raw]).size);
-      setParseError(null);
-      const mask = new Uint8Array(built.length);
-      for (const n of built) if (n.isContainer && n.depth <= 1) mask[n.i] = 1;
-      setExpanded(mask);
-      setActiveIndex(0);
-    } catch (e) {
-      setParseError(`Invalid JSON — ${(e as Error).message}`);
-    }
-  }, []);
-
-  const toggle = useCallback(
-    (nodeIdx: number, deep: boolean) => {
-      setExpanded((prev) => {
-        const next = new Uint8Array(prev);
-        const node = nodes[nodeIdx];
-        if (!node) return prev;
-        const opening = next[nodeIdx] !== 1;
-        if (deep) {
-          for (let i = nodeIdx; i < node.end; i++) {
-            if (!nodes[i].isContainer) continue;
-            next[i] = opening ? 1 : 0;
-          }
-        } else {
-          next[nodeIdx] = opening ? 1 : 0;
-        }
-        return next;
-      });
-    },
-    [nodes],
-  );
-
-  const copyPath = useCallback(async (path: string) => {
-    await copyText(path);
-    setCopiedPath(path);
-    setTimeout(() => setCopiedPath((p) => (p === path ? null : p)), 1200);
-  }, []);
-
-  const treeData: RowData = {
-    rows,
-    matched,
-    expanded,
-    activeNode,
-    copiedPath,
-    match: matchQuery,
-    onToggle: toggle,
-    onCopyPath: copyPath,
-  };
-  const dataRef = useRef(treeData);
-  dataRef.current = treeData;
-  const readTreeData = useCallback(() => dataRef.current, []);
-
-  const step = useCallback(
-    (delta: number) => {
-      const total = search.hits.length;
-      if (total === 0) return;
-      setActiveIndex((i) => (i + delta + total) % total);
-    },
-    [search.hits.length],
-  );
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [version, tab]);
 
   const loadSample = () => {
     setText(SAMPLE_JSON);
-    apply(SAMPLE_JSON);
+    loadDocument(SAMPLE_JSON);
   };
 
   const clearAll = () => {
     setText("");
-    setDoc(null);
-    setBytes(0);
-    setParseError(null);
     setQuery("");
-    setExpanded(new Uint8Array(0));
+    clearDocument();
   };
+
+  const hitCount = store.hits.length;
+  const hasDoc = store.doc !== null;
 
   return (
     <div className="flex h-screen flex-col overflow-hidden bg-background">
-      <Header nodeCount={stats.nodes} matchCount={search.hits.length} hasQuery={!!debounced} />
+      <Header nodeCount={store.stats.nodes} matchCount={hitCount} hasQuery={!!trimmed} />
 
       <main className="flex min-h-0 flex-1 flex-col lg:flex-row">
         <aside className="flex w-full shrink-0 flex-col border-border lg:w-[360px] lg:border-r">
           <SourceControls
             text={text}
             onTextChange={setText}
-            onApply={apply}
+            onApply={loadDocument}
             onClear={clearAll}
             onSample={loadSample}
-            error={parseError}
+            error={store.parseError}
           />
           <MatchLedger
             items={ledgerItems}
-            total={search.hits.length}
-            activeIndex={activeIndex}
+            total={hitCount}
+            activeIndex={store.activeIndex}
             onSelect={setActiveIndex}
-            hasQuery={!!debounced}
+            hasQuery={!!trimmed}
           />
         </aside>
 
@@ -279,25 +196,29 @@ function Sift() {
                 onCaseToggle={() => setCaseSensitive((v) => !v)}
                 regex={regex}
                 onRegexToggle={() => setRegex((v) => !v)}
-                matchCount={search.hits.length}
-                activeIndex={activeIndex}
-                onStep={step}
-                ms={search.ms}
-                error={search.error}
-                translated={search.translated}
+                matchCount={hitCount}
+                activeIndex={store.activeIndex}
+                onStep={stepActive}
+                ms={store.ms}
+                error={store.error}
+                translated={store.translated}
               />
               <div className="min-h-0 flex-1">
-                <TreePanel listRef={listRef} read={readTreeData} rowCount={rows.length} />
+                <TreePanel listRef={listRef} read={readTreeData} rowCount={store.rows.length} />
               </div>
-              <StatStrip stats={stats} />
+              <StatStrip stats={store.stats} />
             </>
           ) : (
-            <SqlConsole doc={doc} />
+            <SqlConsole hasDoc={hasDoc} docVersion={version} getDoc={getDocFromStore} />
           )}
         </section>
       </main>
     </div>
   );
+}
+
+function getDocFromStore() {
+  return getState().doc;
 }
 
 function Tab({
@@ -327,60 +248,4 @@ function Tab({
       {children}
     </button>
   );
-}
-
-function runSearch(
-  index: SearchIndex,
-  nodes: TreeNode[],
-  query: string,
-  opts: ScanOptions,
-  cacheRef: React.MutableRefObject<ScanCache | null>,
-): SearchResult {
-  if (!query.trim() || nodes.length === 0) {
-    cacheRef.current = null;
-    return EMPTY;
-  }
-  const started = performance.now();
-
-  if (looksLikeMongo(query)) {
-    try {
-      const parsed = parseMongo(query);
-      const hits = Int32Array.from(runMongo(nodes, parsed));
-      cacheRef.current = null;
-      return {
-        hits,
-        truncated: false,
-        ms: performance.now() - started,
-        error: null,
-        translated: toSqlWhere(parsed),
-      };
-    } catch (e) {
-      return { ...EMPTY, error: (e as Error).message };
-    }
-  }
-
-  try {
-    const key = `${opts.scope}|${opts.caseSensitive}|${opts.regex}`;
-    const cache = cacheRef.current;
-    // Typing forward only ever narrows a substring search — rescan just the
-    // previous hits instead of the whole document.
-    const canNarrow =
-      !opts.regex &&
-      cache !== null &&
-      cache.key === key &&
-      !cache.truncated &&
-      query.length > cache.query.length &&
-      query.startsWith(cache.query);
-
-    const { indices, truncated } = scanIndex(
-      index,
-      query,
-      opts,
-      canNarrow ? cache!.hits : undefined,
-    );
-    cacheRef.current = { query, key, hits: indices, truncated };
-    return { hits: indices, truncated, ms: performance.now() - started, error: null, translated: null };
-  } catch (e) {
-    return { ...EMPTY, error: `Invalid pattern — ${(e as Error).message}` };
-  }
 }

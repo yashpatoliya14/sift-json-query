@@ -1,3 +1,4 @@
+import { createContext, useContext } from "react";
 import type { RowComponentProps } from "react-window";
 import { JsonNode } from "@/components/JsonNode";
 import type { SearchScope, TreeNode } from "@/lib/types";
@@ -22,19 +23,28 @@ export interface RowData {
   onCopyPath: (path: string) => void;
 }
 
-export function VirtualRow({
-  index,
-  style,
-  rows,
-  matched,
-  expanded,
-  activeNode,
-  copiedPath,
-  match,
-  onToggle,
-  onCopyPath,
-}: RowComponentProps<RowData>) {
+const EMPTY_ROW_DATA: RowData = {
+  rows: [],
+  matched: new Uint8Array(0),
+  expanded: new Uint8Array(0),
+  activeNode: -1,
+  copiedPath: null,
+  match: null,
+  onToggle: () => {},
+  onCopyPath: () => {},
+};
+
+/**
+ * Row data travels by context, never as react-window rowProps: passing the flat
+ * node list to every row makes React re-walk a huge object per rendered row.
+ */
+export const TreeDataContext = createContext<RowData>(EMPTY_ROW_DATA);
+
+export function VirtualRow({ index, style }: RowComponentProps<Record<string, never>>) {
+  const { rows, matched, expanded, activeNode, copiedPath, match, onToggle, onCopyPath } =
+    useContext(TreeDataContext);
   const node = rows[index];
+  if (!node) return null;
   return (
     <div style={style}>
       <JsonNode

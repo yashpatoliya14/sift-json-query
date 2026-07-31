@@ -26,7 +26,7 @@ export function TreePanel({ listRef, ...data }: Props) {
         rowCount={data.rows.length}
         rowHeight={24}
         rowProps={data}
-        rowKey={({ index }) => data.rows[index].path}
+        rowKey={(index) => data.rows[index].path}
         overscanCount={12}
         className="h-full"
       />

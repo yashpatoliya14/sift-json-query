@@ -31,6 +31,7 @@ export function buildNodes(root: JsonValue): TreeNode[] {
     const isContainer = kind === "object" || kind === "array";
     const index = out.length;
     const node: TreeNode = {
+      i: index,
       path,
       parent,
       key,
@@ -71,28 +72,19 @@ export function computeStats(nodes: TreeNode[], bytes: number): JsonStats {
   return { nodes: nodes.length, leaves, containers, depth, bytes };
 }
 
-/** Rows currently visible given the expanded set (collapsed subtrees are skipped). */
-export function visibleRows(nodes: TreeNode[], expanded: Set<string>): TreeNode[] {
+/** Rows currently visible given the expanded mask (collapsed subtrees are skipped). */
+export function visibleRows(nodes: TreeNode[], expanded: Uint8Array): TreeNode[] {
   const rows: TreeNode[] = [];
   let i = 0;
-  while (i < nodes.length) {
+  const len = nodes.length;
+  while (i < len) {
     const node = nodes[i];
     rows.push(node);
-    if (node.isContainer && !expanded.has(node.path)) {
+    if (node.isContainer && expanded[i] !== 1) {
       i = node.end;
     } else {
       i += 1;
     }
   }
   return rows;
-}
-
-export function ancestorsOf(path: string, index: Map<string, TreeNode>): string[] {
-  const chain: string[] = [];
-  let current = index.get(path)?.parent ?? null;
-  while (current) {
-    chain.push(current);
-    current = index.get(current)?.parent ?? null;
-  }
-  return chain;
 }

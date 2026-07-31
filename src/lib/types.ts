@@ -9,6 +9,8 @@ export type JsonValue =
 export type NodeKind = "object" | "array" | "string" | "number" | "boolean" | "null";
 
 export interface TreeNode {
+  /** index in the flat node list */
+  i: number;
   /** JSON path, e.g. $.users[0].name — also used as the row id */
   path: string;
   parent: string | null;
@@ -52,7 +54,9 @@ export interface MatchHit {
 }
 
 export interface SearchResult {
-  hits: MatchHit[];
+  /** matched node indices into the flat node list */
+  hits: Int32Array;
+  truncated: boolean;
   ms: number;
   error: string | null;
   /** SQL-ish translation shown to the user when a Mongo-style query is used */

@@ -18,7 +18,7 @@ import { buildSearchIndex, expandAncestors, scanIndex } from "@/lib/searchIndex"
 import type { ScanOptions, SearchIndex } from "@/lib/searchIndex";
 import { cn } from "@/lib/utils";
 import type { MatchQuery } from "@/components/VirtualRow";
-import type { JsonValue, SearchResult, SearchScope } from "@/lib/types";
+import type { JsonValue, SearchResult, SearchScope, TreeNode } from "@/lib/types";
 
 export const Route = createFileRoute("/")({
   head: () => ({
@@ -92,8 +92,8 @@ function Sift() {
   }, [index]);
 
   const search = useMemo<SearchResult>(
-    () => runSearch(index, nodes.length, debounced, { scope, caseSensitive, regex }, cacheRef),
-    [index, nodes.length, debounced, scope, caseSensitive, regex],
+    () => runSearch(index, nodes, debounced, { scope, caseSensitive, regex }, cacheRef),
+    [index, nodes, debounced, scope, caseSensitive, regex],
   );
 
   const matched = useMemo(() => {
@@ -306,12 +306,12 @@ function Tab({
 
 function runSearch(
   index: SearchIndex,
-  nodeCount: number,
+  nodes: TreeNode[],
   query: string,
   opts: ScanOptions,
   cacheRef: React.MutableRefObject<ScanCache | null>,
 ): SearchResult {
-  if (!query.trim() || nodeCount === 0) {
+  if (!query.trim() || nodes.length === 0) {
     cacheRef.current = null;
     return EMPTY;
   }
@@ -320,7 +320,7 @@ function runSearch(
   if (looksLikeMongo(query)) {
     try {
       const parsed = parseMongo(query);
-      const hits = Int32Array.from(runMongo(index, parsed));
+      const hits = Int32Array.from(runMongo(nodes, parsed));
       cacheRef.current = null;
       return {
         hits,

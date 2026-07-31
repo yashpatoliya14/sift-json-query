@@ -3,7 +3,7 @@ import { createFileRoute } from "@tanstack/react-router";
 import type { ListImperativeAPI } from "react-window";
 
 import { Header } from "@/components/Header";
-import { MatchLedger } from "@/components/MatchLedger";
+import { MatchLedger, type LedgerItem } from "@/components/MatchLedger";
 import { SearchControls } from "@/components/SearchControls";
 import { SourceControls } from "@/components/SourceControls";
 import { SqlConsole } from "@/components/SqlConsole";
@@ -11,7 +11,7 @@ import { StatStrip } from "@/components/StatStrip";
 import { TreePanel } from "@/components/TreePanel";
 import { DatabaseIcon, TreeIcon } from "@/components/icons";
 import { buildNodes, computeStats, visibleRows } from "@/lib/flattenTree";
-import { copyText } from "@/lib/jsonTools";
+import { copyText, rawText } from "@/lib/jsonTools";
 import { looksLikeMongo, parseMongo, runMongo, toSqlWhere } from "@/lib/mongoSearch";
 import { SAMPLE_JSON } from "@/lib/sampleData";
 import { buildSearchIndex, expandAncestors, scanIndex } from "@/lib/searchIndex";
@@ -43,6 +43,7 @@ export const Route = createFileRoute("/")({
 });
 
 const NO_HITS = new Int32Array(0);
+const LEDGER_WINDOW = 200;
 const EMPTY: SearchResult = {
   hits: NO_HITS,
   truncated: false,
@@ -120,6 +121,26 @@ function Sift() {
   }, [search.hits, index]);
 
   const rows = useMemo(() => visibleRows(nodes, expanded), [nodes, expanded]);
+
+  // Only a small window of hits is ever handed to the ledger.
+  const ledgerItems = useMemo<LedgerItem[]>(() => {
+    const total = search.hits.length;
+    if (total === 0) return [];
+    const from = Math.max(0, Math.min(activeIndex - 40, total - LEDGER_WINDOW));
+    const to = Math.min(total, from + LEDGER_WINDOW);
+    const out: LedgerItem[] = [];
+    for (let i = from; i < to; i++) {
+      const node = nodes[search.hits[i]];
+      if (!node) continue;
+      out.push({
+        index: i,
+        path: node.path,
+        key: node.key,
+        preview: node.isContainer ? `${node.childCount} children` : rawText(node),
+      });
+    }
+    return out;
+  }, [search.hits, activeIndex, nodes]);
 
   // Keep the active match in view.
   useEffect(() => {
@@ -215,8 +236,8 @@ function Sift() {
             error={parseError}
           />
           <MatchLedger
-            nodes={nodes}
-            hits={search.hits}
+            items={ledgerItems}
+            total={search.hits.length}
             activeIndex={activeIndex}
             onSelect={setActiveIndex}
             hasQuery={!!debounced}

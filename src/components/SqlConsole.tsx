@@ -6,7 +6,15 @@ import type { JsonValue } from "@/lib/types";
 
 type Status = "idle" | "booting" | "ready" | "failed";
 
-export function SqlConsole({ doc }: { doc: JsonValue | null }) {
+export function SqlConsole({
+  hasDoc,
+  docVersion,
+  getDoc,
+}: {
+  hasDoc: boolean;
+  docVersion: number;
+  getDoc: () => JsonValue | null;
+}) {
   const [status, setStatus] = useState<Status>("idle");
   const [info, setInfo] = useState<string | null>(null);
   const [sql, setSql] = useState("SELECT * FROM data LIMIT 20");
@@ -16,13 +24,16 @@ export function SqlConsole({ doc }: { doc: JsonValue | null }) {
 
   // Re-register the document whenever it changes while the engine is up.
   useEffect(() => {
+    const doc = getDoc();
     if (status !== "ready" || !doc) return;
     loadJson(doc)
       .then(({ rows }) => setInfo(`data · ${rows} rows`))
       .catch((e: Error) => setError(e.message));
-  }, [doc, status]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [docVersion, status]);
 
   const boot = async () => {
+    const doc = getDoc();
     if (!doc) return;
     setStatus("booting");
     setError(null);
@@ -49,7 +60,7 @@ export function SqlConsole({ doc }: { doc: JsonValue | null }) {
     }
   };
 
-  if (!doc) {
+  if (!hasDoc) {
     return (
       <div className="flex h-full items-center justify-center px-6 text-center font-mono text-[13px] text-muted-foreground">
         Load a document first — the SQL engine queries whatever you have open.

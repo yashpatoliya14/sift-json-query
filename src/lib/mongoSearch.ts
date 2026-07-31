@@ -92,12 +92,20 @@ function compare(value: unknown, c: Condition): boolean {
   }
 }
 
-/** Nodes whose key matches the field and whose value satisfies every condition. */
-export function runMongo(nodes: TreeNode[], queries: MongoQuery[]): TreeNode[] {
-  return nodes.filter((node) => {
-    if (node.isContainer) return false;
-    return queries.every(
-      (q) => node.key === q.field && q.conditions.every((c) => compare(node.value, c)),
-    );
-  });
+/** Indices of nodes whose key matches the field and whose value satisfies every condition. */
+export function runMongo(nodes: TreeNode[], queries: MongoQuery[]): number[] {
+  const out: number[] = [];
+  for (let i = 0; i < nodes.length; i++) {
+    const node = nodes[i];
+    if (node.isContainer) continue;
+    let ok = true;
+    for (const q of queries) {
+      if (node.key !== q.field || !q.conditions.every((c) => compare(node.value, c))) {
+        ok = false;
+        break;
+      }
+    }
+    if (ok) out.push(i);
+  }
+  return out;
 }

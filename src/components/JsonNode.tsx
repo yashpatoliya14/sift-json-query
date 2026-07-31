@@ -1,16 +1,19 @@
+import { useMemo } from "react";
 import { Highlight } from "@/components/Highlight";
 import { ChevronIcon, CopyIcon } from "@/components/icons";
-import { rawText } from "@/lib/jsonTools";
+import { findRanges, rawText } from "@/lib/jsonTools";
 import { cn } from "@/lib/utils";
-import type { MatchHit, TreeNode } from "@/lib/types";
+import type { MatchQuery } from "@/components/VirtualRow";
+import type { TreeNode } from "@/lib/types";
 
 export interface JsonNodeProps {
   node: TreeNode;
-  hit?: MatchHit;
+  /** non-null when this row is a hit — ranges are computed lazily, only for rendered rows */
+  match: MatchQuery | null;
   isActive: boolean;
   isExpanded: boolean;
   copied: boolean;
-  onToggle: (path: string, deep: boolean) => void;
+  onToggle: (index: number, deep: boolean) => void;
   onCopyPath: (path: string) => void;
 }
 
@@ -23,7 +26,7 @@ const valueClass: Record<string, string> = {
 
 export function JsonNode({
   node,
-  hit,
+  match,
   isActive,
   isExpanded,
   copied,
@@ -31,6 +34,22 @@ export function JsonNode({
   onCopyPath,
 }: JsonNodeProps) {
   const text = rawText(node);
+
+  const ranges = useMemo(() => {
+    if (!match) return { key: undefined, value: undefined };
+    const opts = { caseSensitive: match.caseSensitive, regex: match.regex };
+    try {
+      return {
+        key: match.scope === "values" ? undefined : findRanges(node.key, match.query, opts),
+        value:
+          match.scope === "keys" || node.isContainer
+            ? undefined
+            : findRanges(text, match.query, opts),
+      };
+    } catch {
+      return { key: undefined, value: undefined };
+    }
+  }, [match, node.key, node.isContainer, text]);
 
   return (
     <div
@@ -44,7 +63,7 @@ export function JsonNode({
       {node.isContainer ? (
         <button
           type="button"
-          onClick={(e) => onToggle(node.path, e.altKey || e.shiftKey)}
+          onClick={(e) => onToggle(node.i, e.altKey || e.shiftKey)}
           aria-expanded={isExpanded}
           aria-label={`${isExpanded ? "Collapse" : "Expand"} ${node.path}`}
           className="shrink-0 text-muted-foreground transition-colors hover:text-brass"
@@ -59,11 +78,11 @@ export function JsonNode({
 
       <button
         type="button"
-        onClick={() => (node.isContainer ? onToggle(node.path, false) : onCopyPath(node.path))}
+        onClick={() => (node.isContainer ? onToggle(node.i, false) : onCopyPath(node.path))}
         className="flex min-w-0 flex-1 items-center gap-2 text-left"
       >
         <span className="shrink-0 text-brass">
-          <Highlight text={node.key} ranges={hit?.keyRanges} activeRange={isActive ? 0 : -1} />
+          <Highlight text={node.key} ranges={ranges.key} activeRange={isActive ? 0 : -1} />
           {node.key !== "$" && <span className="text-muted-foreground">:</span>}
         </span>
 
@@ -78,7 +97,7 @@ export function JsonNode({
         ) : (
           <span className={cn("truncate", valueClass[node.kind])}>
             {node.kind === "string" && <span className="text-t-null">&quot;</span>}
-            <Highlight text={text} ranges={hit?.valueRanges} activeRange={isActive ? 0 : -1} />
+            <Highlight text={text} ranges={ranges.value} activeRange={isActive ? 0 : -1} />
             {node.kind === "string" && <span className="text-t-null">&quot;</span>}
           </span>
         )}

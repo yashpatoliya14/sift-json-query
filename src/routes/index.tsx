@@ -122,20 +122,6 @@ function Sift() {
 
   const rows = useMemo(() => visibleRows(nodes, expanded), [nodes, expanded]);
 
-  const treeData: RowData = {
-    rows,
-    matched,
-    expanded,
-    activeNode,
-    copiedPath,
-    match: matchQuery,
-    onToggle: toggle,
-    onCopyPath: copyPath,
-  };
-  const dataRef = useRef(treeData);
-  dataRef.current = treeData;
-  const readTreeData = useCallback(() => dataRef.current, []);
-
   // Only a small window of hits is ever handed to the ledger.
   const ledgerItems = useMemo<LedgerItem[]>(() => {
     const total = search.hits.length;
@@ -211,6 +197,20 @@ function Sift() {
     setCopiedPath(path);
     setTimeout(() => setCopiedPath((p) => (p === path ? null : p)), 1200);
   }, []);
+
+  const treeData: RowData = {
+    rows,
+    matched,
+    expanded,
+    activeNode,
+    copiedPath,
+    match: matchQuery,
+    onToggle: toggle,
+    onCopyPath: copyPath,
+  };
+  const dataRef = useRef(treeData);
+  dataRef.current = treeData;
+  const readTreeData = useCallback(() => dataRef.current, []);
 
   const step = useCallback(
     (delta: number) => {

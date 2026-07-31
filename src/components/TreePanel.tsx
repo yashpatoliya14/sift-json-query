@@ -1,9 +1,11 @@
 import { List, type ListImperativeAPI } from "react-window";
-import { VirtualRow, type RowData } from "@/components/VirtualRow";
+import { TreeDataContext, VirtualRow, type RowData } from "@/components/VirtualRow";
 
 interface Props extends RowData {
   listRef: React.RefObject<ListImperativeAPI | null>;
 }
+
+const NO_ROW_PROPS = {} as Record<string, never>;
 
 export function TreePanel({ listRef, ...data }: Props) {
   if (data.rows.length === 0) {
@@ -17,19 +19,20 @@ export function TreePanel({ listRef, ...data }: Props) {
   }
 
   return (
-    <div className="relative h-full">
-      {/* strata rail — depth ticks down the gutter */}
-      <div className="strata-rail pointer-events-none absolute top-0 bottom-0 left-[3px] w-px opacity-60" />
-      <List
-        listRef={listRef}
-        rowComponent={VirtualRow}
-        rowCount={data.rows.length}
-        rowHeight={24}
-        rowProps={data}
-        rowKey={(index) => data.rows[index].path}
-        overscanCount={12}
-        className="h-full"
-      />
-    </div>
+    <TreeDataContext.Provider value={data}>
+      <div className="relative h-full">
+        {/* strata rail — depth ticks down the gutter */}
+        <div className="strata-rail pointer-events-none absolute top-0 bottom-0 left-[3px] w-px opacity-60" />
+        <List
+          listRef={listRef}
+          rowComponent={VirtualRow}
+          rowCount={data.rows.length}
+          rowHeight={24}
+          rowProps={NO_ROW_PROPS}
+          overscanCount={8}
+          className="h-full"
+        />
+      </div>
+    </TreeDataContext.Provider>
   );
 }

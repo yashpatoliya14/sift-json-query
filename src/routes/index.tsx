@@ -17,7 +17,7 @@ import { SAMPLE_JSON } from "@/lib/sampleData";
 import { buildSearchIndex, expandAncestors, scanIndex } from "@/lib/searchIndex";
 import type { ScanOptions, SearchIndex } from "@/lib/searchIndex";
 import { cn } from "@/lib/utils";
-import type { MatchQuery } from "@/components/VirtualRow";
+import type { MatchQuery, RowData } from "@/components/VirtualRow";
 import type { JsonValue, SearchResult, SearchScope, TreeNode } from "@/lib/types";
 
 export const Route = createFileRoute("/")({
@@ -121,6 +121,20 @@ function Sift() {
   }, [search.hits, index]);
 
   const rows = useMemo(() => visibleRows(nodes, expanded), [nodes, expanded]);
+
+  const treeData: RowData = {
+    rows,
+    matched,
+    expanded,
+    activeNode,
+    copiedPath,
+    match: matchQuery,
+    onToggle: toggle,
+    onCopyPath: copyPath,
+  };
+  const dataRef = useRef(treeData);
+  dataRef.current = treeData;
+  const readTreeData = useCallback(() => dataRef.current, []);
 
   // Only a small window of hits is ever handed to the ledger.
   const ledgerItems = useMemo<LedgerItem[]>(() => {
@@ -273,17 +287,7 @@ function Sift() {
                 translated={search.translated}
               />
               <div className="min-h-0 flex-1">
-                <TreePanel
-                  listRef={listRef}
-                  rows={rows}
-                  matched={matched}
-                  expanded={expanded}
-                  activeNode={activeNode}
-                  copiedPath={copiedPath}
-                  match={matchQuery}
-                  onToggle={toggle}
-                  onCopyPath={copyPath}
-                />
+                <TreePanel listRef={listRef} read={readTreeData} rowCount={rows.length} />
               </div>
               <StatStrip stats={stats} />
             </>

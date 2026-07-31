@@ -35,14 +35,18 @@ const EMPTY_ROW_DATA: RowData = {
 };
 
 /**
- * Row data travels by context, never as react-window rowProps: passing the flat
- * node list to every row makes React re-walk a huge object per rendered row.
+ * Row data travels by context behind a getter, never as props: React walks prop
+ * objects on every render, and walking a 100k-node array per row is fatal.
  */
-export const TreeDataContext = createContext<RowData>(EMPTY_ROW_DATA);
+export interface TreeDataSource {
+  read: () => RowData;
+}
+
+export const TreeDataContext = createContext<TreeDataSource>({ read: () => EMPTY_ROW_DATA });
 
 export function VirtualRow({ index, style }: RowComponentProps<Record<string, never>>) {
   const { rows, matched, expanded, activeNode, copiedPath, match, onToggle, onCopyPath } =
-    useContext(TreeDataContext);
+    useContext(TreeDataContext).read();
   const node = rows[index];
   if (!node) return null;
   return (

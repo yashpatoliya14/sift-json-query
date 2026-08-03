@@ -17,17 +17,26 @@ export interface SearchIndex {
 
 export const MAX_HITS = 50_000;
 
-export function buildSearchIndex(nodes: TreeNode[]): SearchIndex {
+export function buildSearchIndex(nodes: TreeNode[], parentIdx?: Int32Array): SearchIndex {
   const size = nodes.length;
   const keys = new Array<string>(size);
   const keysLower = new Array<string>(size);
   const vals = new Array<string>(size);
   const valsLower = new Array<string>(size);
-  const parent = new Int32Array(size).fill(-1);
   const container = new Uint8Array(size);
 
-  const byPath = new Map<string, number>();
-  for (let i = 0; i < size; i++) byPath.set(nodes[i].path, i);
+  let parent: Int32Array;
+  if (parentIdx && parentIdx.length === size) {
+    parent = parentIdx;
+  } else {
+    parent = new Int32Array(size).fill(-1);
+    const byPath = new Map<string, number>();
+    for (let i = 0; i < size; i++) byPath.set(nodes[i].path, i);
+    for (let i = 0; i < size; i++) {
+      const p = nodes[i].parent;
+      parent[i] = p === null ? -1 : (byPath.get(p) ?? -1);
+    }
+  }
 
   for (let i = 0; i < size; i++) {
     const n = nodes[i];
@@ -43,11 +52,11 @@ export function buildSearchIndex(nodes: TreeNode[]): SearchIndex {
       vals[i] = raw;
       valsLower[i] = raw.toLowerCase();
     }
-    parent[i] = n.parent === null ? -1 : (byPath.get(n.parent) ?? -1);
   }
 
   return { size, keys, keysLower, vals, valsLower, parent, container };
 }
+
 
 export interface ScanOptions {
   scope: SearchScope;

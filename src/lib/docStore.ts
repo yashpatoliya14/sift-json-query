@@ -1,7 +1,8 @@
-import { buildNodes, computeStats, visibleRows } from "./flattenTree";
+import { buildTree, computeStats, visibleRows } from "./flattenTree";
 import { looksLikeMongo, parseMongo, runMongo, toSqlWhere } from "./mongoSearch";
 import { buildSearchIndex, expandAncestors, scanIndex, type ScanOptions, type SearchIndex } from "./searchIndex";
 import type { JsonStats, JsonValue, TreeNode } from "./types";
+
 
 /**
  * All bulk document state lives outside React.

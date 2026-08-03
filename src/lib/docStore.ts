@@ -28,6 +28,10 @@ export interface DocState {
   translated: string | null;
   parseError: string | null;
   bytes: number;
+  /** Non-null while a document is being ingested. */
+  loading: { phase: string; pct: number } | null;
+  loadMs: number;
+
 }
 
 const EMPTY_INDEX: SearchIndex = {

@@ -60,9 +60,12 @@ const state: DocState = {
   translated: null,
   parseError: null,
   bytes: 0,
+  loading: null,
+  loadMs: 0,
 };
 
 let version = 0;
+let docVersion = 0;
 const listeners = new Set<() => void>();
 
 export function subscribe(listener: () => void): () => void {
@@ -74,6 +77,11 @@ export function subscribe(listener: () => void): () => void {
 
 export function getVersion(): number {
   return version;
+}
+
+/** Bumps only when the document itself changes (not on search / expand). */
+export function getDocVersion(): number {
+  return docVersion;
 }
 
 export function getState(): DocState {
@@ -92,42 +100,100 @@ function recomputeRows() {
 // ---- search cache: typing forward only narrows a substring scan ------------
 let cache: { query: string; key: string; hits: Int32Array; truncated: boolean } | null = null;
 
-export function loadDocument(raw: string) {
+/** Yield to the browser so the progress UI can paint between heavy phases. */
+const yieldToBrowser = () =>
+  new Promise<void>((resolve) => {
+    requestAnimationFrame(() => setTimeout(resolve, 0));
+  });
+
+let loadToken = 0;
+
+function setPhase(phase: string, pct: number) {
+  state.loading = { phase, pct };
+  commit();
+}
+
+/**
+ * Ingest a document in phases, yielding between each so the UI stays live and
+ * shows progress. Each phase is a tight, allocation-light pass.
+ */
+export async function loadDocument(raw: string, sizeHint?: number) {
   if (!raw.trim()) {
     state.parseError = "Nothing to parse yet.";
+    state.loading = null;
     commit();
     return;
   }
-  try {
-    const parsed = JSON.parse(raw) as JsonValue;
-    const nodes = buildNodes(parsed);
-    const expanded = new Uint8Array(nodes.length);
-    for (const n of nodes) if (n.isContainer && n.depth <= 1) expanded[n.i] = 1;
 
-    state.doc = parsed;
-    state.nodes = nodes;
-    state.index = buildSearchIndex(nodes);
-    state.bytes = new Blob([raw]).size;
-    state.stats = computeStats(nodes, state.bytes);
-    state.expanded = expanded;
-    state.hits = new Int32Array(0);
-    state.matched = new Uint8Array(nodes.length);
-    state.truncated = false;
-    state.activeIndex = 0;
-    state.ms = 0;
-    state.error = null;
-    state.translated = null;
-    state.parseError = null;
-    cache = null;
-    recomputeRows();
-    commit();
+  const token = ++loadToken;
+  const started = performance.now();
+  const stale = () => token !== loadToken;
+
+  state.parseError = null;
+  setPhase("reading", 5);
+  await yieldToBrowser();
+  if (stale()) return;
+
+  let parsed: JsonValue;
+  try {
+    parsed = JSON.parse(raw) as JsonValue;
   } catch (e) {
+    if (stale()) return;
     state.parseError = `Invalid JSON — ${(e as Error).message}`;
+    state.loading = null;
     commit();
+    return;
   }
+
+  // Byte count: exact for modest payloads, cheap estimate for huge ones.
+  const bytes = sizeHint ?? (raw.length > 8_000_000 ? raw.length : new Blob([raw]).size);
+
+  setPhase("flattening", 35);
+  await yieldToBrowser();
+  if (stale()) return;
+
+  const { nodes, parentIdx } = buildTree(parsed);
+
+  setPhase("indexing", 70);
+  await yieldToBrowser();
+  if (stale()) return;
+
+  const index = buildSearchIndex(nodes, parentIdx);
+
+  setPhase("laying out", 90);
+  await yieldToBrowser();
+  if (stale()) return;
+
+  const expanded = new Uint8Array(nodes.length);
+  for (let i = 0; i < nodes.length; i++) {
+    const n = nodes[i];
+    if (n.isContainer && n.depth <= 1) expanded[i] = 1;
+  }
+
+  state.doc = parsed;
+  state.nodes = nodes;
+  state.index = index;
+  state.bytes = bytes;
+  state.stats = computeStats(nodes, bytes);
+  state.expanded = expanded;
+  state.hits = new Int32Array(0);
+  state.matched = new Uint8Array(nodes.length);
+  state.truncated = false;
+  state.activeIndex = 0;
+  state.ms = 0;
+  state.error = null;
+  state.translated = null;
+  state.parseError = null;
+  state.loading = null;
+  state.loadMs = performance.now() - started;
+  cache = null;
+  docVersion += 1;
+  recomputeRows();
+  commit();
 }
 
 export function clearDocument() {
+  loadToken++;
   state.doc = null;
   state.nodes = [];
   state.index = EMPTY_INDEX;
@@ -142,9 +208,13 @@ export function clearDocument() {
   state.translated = null;
   state.parseError = null;
   state.bytes = 0;
+  state.loading = null;
+  state.loadMs = 0;
   cache = null;
+  docVersion += 1;
   commit();
 }
+
 
 function setHits(hits: Int32Array, truncated: boolean) {
   state.hits = hits;

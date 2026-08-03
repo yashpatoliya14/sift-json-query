@@ -15,6 +15,7 @@ import { SAMPLE_JSON } from "@/lib/sampleData";
 import {
   activeRowPosition,
   clearDocument,
+  getDocVersion,
   getState,
   getVersion,
   loadDocument,
@@ -138,9 +139,13 @@ function Sift() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [version, tab]);
 
+  const applyText = useCallback((raw: string, bytes?: number) => {
+    void loadDocument(raw, bytes);
+  }, []);
+
   const loadSample = () => {
     setText(SAMPLE_JSON);
-    loadDocument(SAMPLE_JSON);
+    void loadDocument(SAMPLE_JSON);
   };
 
   const clearAll = () => {
@@ -161,10 +166,12 @@ function Sift() {
           <SourceControls
             text={text}
             onTextChange={setText}
-            onApply={loadDocument}
+            onApply={applyText}
             onClear={clearAll}
             onSample={loadSample}
             error={store.parseError}
+            loading={store.loading}
+            loadMs={store.loadMs}
           />
           <MatchLedger
             items={ledgerItems}
@@ -209,7 +216,7 @@ function Sift() {
               <StatStrip stats={store.stats} />
             </>
           ) : (
-            <SqlConsole hasDoc={hasDoc} docVersion={version} getDoc={getDocFromStore} />
+            <SqlConsole hasDoc={hasDoc} docVersion={getDocVersion()} getDoc={getDocFromStore} />
           )}
         </section>
       </main>

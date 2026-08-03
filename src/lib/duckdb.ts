@@ -2,19 +2,24 @@ import type { JsonValue } from "./types";
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
 
+// Bundle the wasm + worker locally instead of pulling them from a CDN at
+// runtime: no network round-trip, no CSP/CORS surprises inside the preview.
+import mvpWasm from "@duckdb/duckdb-wasm/dist/duckdb-mvp.wasm?url";
+import ehWasm from "@duckdb/duckdb-wasm/dist/duckdb-eh.wasm?url";
+import mvpWorker from "@duckdb/duckdb-wasm/dist/duckdb-browser-mvp.worker.js?url";
+import ehWorker from "@duckdb/duckdb-wasm/dist/duckdb-browser-eh.worker.js?url";
+
 let dbPromise: Promise<any> | null = null;
 
 async function createDb(): Promise<any> {
   const duckdb = await import("@duckdb/duckdb-wasm");
-  const bundles = duckdb.getJsDelivrBundles();
-  const bundle = await duckdb.selectBundle(bundles);
-  const workerUrl = URL.createObjectURL(
-    new Blob([`importScripts("${bundle.mainWorker}");`], { type: "text/javascript" }),
-  );
-  const worker = new Worker(workerUrl);
+  const bundle = await duckdb.selectBundle({
+    mvp: { mainModule: mvpWasm, mainWorker: mvpWorker },
+    eh: { mainModule: ehWasm, mainWorker: ehWorker },
+  });
+  const worker = new Worker(bundle.mainWorker!);
   const db = new duckdb.AsyncDuckDB(new duckdb.ConsoleLogger(duckdb.LogLevel.WARNING), worker);
   await db.instantiate(bundle.mainModule, bundle.pthreadWorker);
-  URL.revokeObjectURL(workerUrl);
   return db;
 }
 
@@ -26,10 +31,14 @@ export function getDb(): Promise<any> {
 /** Pick the most table-like array in the document so `data` is useful out of the box. */
 function bestTable(root: JsonValue): JsonValue[] | null {
   let best: JsonValue[] | null = null;
+  let bestScore = 0;
   const visit = (v: JsonValue) => {
     if (Array.isArray(v)) {
       const objects = v.filter((i) => i !== null && typeof i === "object" && !Array.isArray(i));
-      if (objects.length && (!best || objects.length > best.length)) best = v;
+      if (objects.length > bestScore) {
+        bestScore = objects.length;
+        best = v;
+      }
       v.forEach(visit);
     } else if (v && typeof v === "object") {
       Object.values(v).forEach(visit);
@@ -66,7 +75,10 @@ export async function loadJson(root: JsonValue): Promise<{ table: string; rows: 
 function normalize(value: unknown): unknown {
   if (value === null || value === undefined) return null;
   if (typeof value === "bigint") return Number(value);
-  if (typeof value === "object") return JSON.parse(JSON.stringify(value, (_k, v) => (typeof v === "bigint" ? Number(v) : v)));
+  if (typeof value === "object")
+    return JSON.parse(
+      JSON.stringify(value, (_k, v) => (typeof v === "bigint" ? Number(v) : v)),
+    );
   return value;
 }
 

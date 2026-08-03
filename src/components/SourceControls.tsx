@@ -5,25 +5,51 @@ import { cn } from "@/lib/utils";
 interface Props {
   text: string;
   onTextChange: (text: string) => void;
-  onApply: (text: string) => void;
+  onApply: (text: string, bytes?: number) => void;
   onClear: () => void;
   onSample: () => void;
   error: string | null;
+  loading?: { phase: string; pct: number } | null;
+  loadMs?: number;
 }
 
-export function SourceControls({ text, onTextChange, onApply, onClear, onSample, error }: Props) {
+/** Above this, the raw text never enters the textarea — a multi-MB controlled
+ *  <textarea> is the single slowest thing you can do to the main thread. */
+const EDITOR_LIMIT = 512 * 1024;
+
+function formatBytes(n: number) {
+  if (n < 1024) return `${n} B`;
+  if (n < 1024 * 1024) return `${(n / 1024).toFixed(1)} KB`;
+  return `${(n / (1024 * 1024)).toFixed(1)} MB`;
+}
+
+export function SourceControls({
+  text,
+  onTextChange,
+  onApply,
+  onClear,
+  onSample,
+  error,
+  loading,
+  loadMs,
+}: Props) {
   const fileRef = useRef<HTMLInputElement>(null);
   const [dragging, setDragging] = useState(false);
+  const [bigFile, setBigFile] = useState<{ name: string; size: number } | null>(null);
 
-  const readFile = (file: File) => {
-    const reader = new FileReader();
-    reader.onload = () => {
-      const content = String(reader.result ?? "");
+  const readFile = async (file: File) => {
+    // file.text() streams off-thread and skips FileReader's event plumbing.
+    const content = await file.text();
+    if (file.size > EDITOR_LIMIT) {
+      setBigFile({ name: file.name, size: file.size });
+      onTextChange("");
+    } else {
+      setBigFile(null);
       onTextChange(content);
-      onApply(content);
-    };
-    reader.readAsText(file);
+    }
+    onApply(content, file.size);
   };
+
 
   return (
     <section className="flex min-h-0 flex-col border-b border-border">
@@ -64,45 +90,82 @@ export function SourceControls({ text, onTextChange, onApply, onClear, onSample,
         }}
         className={cn("px-3 pb-3", dragging && "bg-panel-raised")}
       >
-        <textarea
-          value={text}
-          spellCheck={false}
-          placeholder={'{ "paste": "your JSON here" }'}
-          onChange={(e) => onTextChange(e.target.value)}
-          onPaste={(e) => {
-            const pasted = e.clipboardData.getData("text");
-            if (pasted.trim()) {
-              e.preventDefault();
-              onTextChange(pasted);
-              onApply(pasted);
-            }
-          }}
-          onKeyDown={(e) => {
-            if ((e.metaKey || e.ctrlKey) && e.key === "Enter") {
-              e.preventDefault();
-              onApply(text);
-            }
-          }}
-          className="h-40 w-full resize-none border border-border bg-background p-2 font-mono text-[12px] leading-relaxed text-foreground placeholder:text-t-null focus:border-brass focus:outline-none"
-          aria-label="JSON source"
-        />
+        {bigFile ? (
+          <div className="flex h-40 flex-col items-center justify-center gap-1 border border-border bg-background px-3 text-center">
+            <span className="font-mono text-[12px] text-t-string">{bigFile.name}</span>
+            <span className="font-mono text-[11px] text-muted-foreground">
+              {formatBytes(bigFile.size)} loaded — too large to edit inline
+            </span>
+            <button
+              type="button"
+              onClick={() => setBigFile(null)}
+              className="mt-1 border border-border px-2 py-1 font-mono text-[10px] text-muted-foreground transition-colors hover:border-brass hover:text-brass"
+            >
+              show editor
+            </button>
+          </div>
+        ) : (
+          <textarea
+            value={text}
+            spellCheck={false}
+            placeholder={'{ "paste": "your JSON here" }'}
+            onChange={(e) => onTextChange(e.target.value)}
+            onPaste={(e) => {
+              const pasted = e.clipboardData.getData("text");
+              if (pasted.trim()) {
+                e.preventDefault();
+                if (pasted.length > EDITOR_LIMIT) {
+                  setBigFile({ name: "pasted JSON", size: pasted.length });
+                  onTextChange("");
+                } else {
+                  onTextChange(pasted);
+                }
+                onApply(pasted);
+              }
+            }}
+            onKeyDown={(e) => {
+              if ((e.metaKey || e.ctrlKey) && e.key === "Enter") {
+                e.preventDefault();
+                onApply(text);
+              }
+            }}
+            className="h-40 w-full resize-none border border-border bg-background p-2 font-mono text-[12px] leading-relaxed text-foreground placeholder:text-t-null focus:border-brass focus:outline-none"
+            aria-label="JSON source"
+          />
+        )}
 
         <div className="mt-2 flex items-center justify-between gap-2">
           <button
             type="button"
+            disabled={!!loading || bigFile !== null}
             onClick={() => onApply(text)}
-            className="border border-brass bg-brass px-3 py-1 font-mono text-[11px] tracking-wide text-background transition-colors hover:bg-transparent hover:text-brass"
+            className="border border-brass bg-brass px-3 py-1 font-mono text-[11px] tracking-wide text-background transition-colors hover:bg-transparent hover:text-brass disabled:opacity-40"
           >
             apply
           </button>
-          <span className="font-mono text-[10px] text-t-null">⌘/ctrl + enter</span>
+          <span className="font-mono text-[10px] text-t-null">
+            {loadMs && !loading ? `parsed in ${Math.round(loadMs)} ms` : "⌘/ctrl + enter"}
+          </span>
         </div>
+
+        {loading && (
+          <div className="mt-2">
+            <div className="h-[3px] w-full bg-panel-raised">
+              <div
+                className="h-full bg-brass transition-[width] duration-150"
+                style={{ width: `${loading.pct}%` }}
+              />
+            </div>
+            <p className="mt-1 font-mono text-[10px] tracking-wide text-brass">{loading.phase}…</p>
+          </div>
+        )}
 
         {error && (
           <p role="alert" className="mt-2 border-l-2 border-destructive pl-2 font-mono text-[11px] text-destructive">
             {error}
           </p>
         )}
+
       </div>
     </section>
   );

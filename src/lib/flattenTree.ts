@@ -22,11 +22,25 @@ export function joinPath(parent: string, key: string, inArray: boolean): string 
   return IDENT.test(key) ? `${parent}.${key}` : `${parent}[${JSON.stringify(key)}]`;
 }
 
-/** Depth-first flatten of a JSON document into an addressable row list. */
+/**
+ * Iterative depth-first flatten of a JSON document into an addressable row list.
+ *
+ * Iterative (explicit stack) so deeply nested documents cannot blow the call
+ * stack, and it avoids Object.entries()' pair allocation per object.
+ */
+interface Frame {
+  node: TreeNode;
+  keys: string[] | null; // null => array
+  arr: JsonValue[] | null;
+  obj: Record<string, JsonValue> | null;
+  i: number;
+  inArray: boolean;
+}
+
 export function buildNodes(root: JsonValue): TreeNode[] {
   const out: TreeNode[] = [];
 
-  const walk = (value: JsonValue, key: string, path: string, parent: string | null, depth: number) => {
+  const make = (value: JsonValue, key: string, path: string, parent: string | null, depth: number): TreeNode => {
     const kind = kindOf(value);
     const isContainer = kind === "object" || kind === "array";
     const index = out.length;
@@ -43,22 +57,47 @@ export function buildNodes(root: JsonValue): TreeNode[] {
       end: index + 1,
     };
     out.push(node);
-
-    if (kind === "array") {
-      const arr = value as JsonValue[];
-      node.childCount = arr.length;
-      arr.forEach((item, i) => walk(item, String(i), joinPath(path, String(i), true), path, depth + 1));
-    } else if (kind === "object") {
-      const entries = Object.entries(value as Record<string, JsonValue>);
-      node.childCount = entries.length;
-      for (const [k, v] of entries) walk(v, k, joinPath(path, k, false), path, depth + 1);
-    }
-    node.end = out.length;
+    return node;
   };
 
-  walk(root, "$", "$", null, 0);
+  const push = (stack: Frame[], value: JsonValue, node: TreeNode) => {
+    if (node.kind === "array") {
+      const arr = value as JsonValue[];
+      node.childCount = arr.length;
+      stack.push({ node, keys: null, arr, obj: null, i: 0, inArray: true });
+    } else {
+      const obj = value as Record<string, JsonValue>;
+      const keys = Object.keys(obj);
+      node.childCount = keys.length;
+      stack.push({ node, keys, arr: null, obj, i: 0, inArray: false });
+    }
+  };
+
+  const rootNode = make(root, "$", "$", null, 0);
+  if (!rootNode.isContainer) return out;
+
+  const stack: Frame[] = [];
+  push(stack, root, rootNode);
+
+  while (stack.length > 0) {
+    const frame = stack[stack.length - 1];
+    const len = frame.inArray ? frame.arr!.length : frame.keys!.length;
+    if (frame.i >= len) {
+      frame.node.end = out.length;
+      stack.pop();
+      continue;
+    }
+    const idx = frame.i++;
+    const key = frame.inArray ? String(idx) : frame.keys![idx];
+    const value = frame.inArray ? frame.arr![idx] : frame.obj![key];
+    const path = joinPath(frame.node.path, key, frame.inArray);
+    const child = make(value, key, path, frame.node.path, frame.node.depth + 1);
+    if (child.isContainer) push(stack, value, child);
+  }
+
   return out;
 }
+
 
 export function computeStats(nodes: TreeNode[], bytes: number): JsonStats {
   let leaves = 0;

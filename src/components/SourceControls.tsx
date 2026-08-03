@@ -5,25 +5,51 @@ import { cn } from "@/lib/utils";
 interface Props {
   text: string;
   onTextChange: (text: string) => void;
-  onApply: (text: string) => void;
+  onApply: (text: string, bytes?: number) => void;
   onClear: () => void;
   onSample: () => void;
   error: string | null;
+  loading?: { phase: string; pct: number } | null;
+  loadMs?: number;
 }
 
-export function SourceControls({ text, onTextChange, onApply, onClear, onSample, error }: Props) {
+/** Above this, the raw text never enters the textarea — a multi-MB controlled
+ *  <textarea> is the single slowest thing you can do to the main thread. */
+const EDITOR_LIMIT = 512 * 1024;
+
+function formatBytes(n: number) {
+  if (n < 1024) return `${n} B`;
+  if (n < 1024 * 1024) return `${(n / 1024).toFixed(1)} KB`;
+  return `${(n / (1024 * 1024)).toFixed(1)} MB`;
+}
+
+export function SourceControls({
+  text,
+  onTextChange,
+  onApply,
+  onClear,
+  onSample,
+  error,
+  loading,
+  loadMs,
+}: Props) {
   const fileRef = useRef<HTMLInputElement>(null);
   const [dragging, setDragging] = useState(false);
+  const [bigFile, setBigFile] = useState<{ name: string; size: number } | null>(null);
 
-  const readFile = (file: File) => {
-    const reader = new FileReader();
-    reader.onload = () => {
-      const content = String(reader.result ?? "");
+  const readFile = async (file: File) => {
+    // file.text() streams off-thread and skips FileReader's event plumbing.
+    const content = await file.text();
+    if (file.size > EDITOR_LIMIT) {
+      setBigFile({ name: file.name, size: file.size });
+      onTextChange("");
+    } else {
+      setBigFile(null);
       onTextChange(content);
-      onApply(content);
-    };
-    reader.readAsText(file);
+    }
+    onApply(content, file.size);
   };
+
 
   return (
     <section className="flex min-h-0 flex-col border-b border-border">

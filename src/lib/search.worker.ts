@@ -88,7 +88,7 @@ self.onmessage = (e: MessageEvent<InMsg>) => {
     docId = msg.docId;
     keys = msg.keys;
     vals = msg.vals;
-    container = msg.container;
+    container = new Uint8Array(msg.container as unknown as ArrayLike<number>);
     keysLower = lowerAll(keys);
     valsLower = lowerAll(vals);
     cache = null;
@@ -119,7 +119,7 @@ self.onmessage = (e: MessageEvent<InMsg>) => {
       result = { indices: new Int32Array(0), truncated: false };
       error = (err as Error).message;
     }
-    const buf = result.indices.buffer;
+    const buf = result.indices.buffer as ArrayBuffer;
     (self as unknown as Worker).postMessage(
       { type: "result", id: msg.id, docId, hits: result.indices, truncated: result.truncated, error },
       [buf],

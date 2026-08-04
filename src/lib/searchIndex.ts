@@ -104,8 +104,9 @@ export function scanIndex(
     return { indices: Int32Array.from(out), truncated: out.length >= MAX_HITS };
   }
 
-  const keys = opts.caseSensitive ? index.keys : index.keysLower;
-  const vals = opts.caseSensitive ? index.vals : index.valsLower;
+  if (!opts.caseSensitive) ensureLower(index);
+  const keys = opts.caseSensitive ? index.keys : index.keysLower!;
+  const vals = opts.caseSensitive ? index.vals : index.valsLower!;
   const needle = opts.caseSensitive ? query : query.toLowerCase();
 
   for (let p = 0; p < total && out.length < MAX_HITS; p++) {

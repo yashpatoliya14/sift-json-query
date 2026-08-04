@@ -214,6 +214,7 @@ export function clearDocument() {
   state.loadMs = 0;
   cache = null;
   docVersion += 1;
+  resetWorkerIndex();
   commit();
 }
 

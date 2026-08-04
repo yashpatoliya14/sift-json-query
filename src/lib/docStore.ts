@@ -234,9 +234,12 @@ function setHits(hits: Int32Array, truncated: boolean) {
   recomputeRows();
 }
 
-export function runSearch(query: string, opts: ScanOptions) {
+let searchToken = 0;
+
+export async function runSearch(query: string, opts: ScanOptions) {
   if (state.nodes.length === 0) return;
   const started = performance.now();
+  const token = ++searchToken;
 
   if (!query.trim()) {
     cache = null;
@@ -267,6 +270,21 @@ export function runSearch(query: string, opts: ScanOptions) {
     return;
   }
 
+  // Off-thread scan: the worker owns the string columns and the narrowing cache.
+  if (workerAvailable()) {
+    const res = await scanInWorker(docVersion, query, opts);
+    if (token !== searchToken) return; // a newer keystroke already won
+    if (res) {
+      state.error = res.error ? `Invalid pattern — ${res.error}` : null;
+      state.translated = null;
+      setHits(res.error ? new Int32Array(0) : res.hits, res.truncated);
+      state.ms = performance.now() - started;
+      commit();
+      return;
+    }
+    // worker unavailable / stale index → fall through to the main-thread scan
+  }
+
   try {
     const key = `${opts.scope}|${opts.caseSensitive}|${opts.regex}`;
     const canNarrow =
@@ -283,6 +301,7 @@ export function runSearch(query: string, opts: ScanOptions) {
       opts,
       canNarrow && cache ? cache.hits : undefined,
     );
+    if (token !== searchToken) return;
     cache = { query, key, hits: indices, truncated };
     state.error = null;
     state.translated = null;

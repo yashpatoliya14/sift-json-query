@@ -8,9 +8,10 @@ import type { SearchScope, TreeNode } from "./types";
 export interface SearchIndex {
   size: number;
   keys: string[];
-  keysLower: string[];
+  /** lowercased columns — built lazily (the worker owns its own copies) */
+  keysLower: string[] | null;
   vals: string[];
-  valsLower: string[];
+  valsLower: string[] | null;
   parent: Int32Array;
   container: Uint8Array;
 }
@@ -20,9 +21,7 @@ export const MAX_HITS = 50_000;
 export function buildSearchIndex(nodes: TreeNode[], parentIdx?: Int32Array): SearchIndex {
   const size = nodes.length;
   const keys = new Array<string>(size);
-  const keysLower = new Array<string>(size);
   const vals = new Array<string>(size);
-  const valsLower = new Array<string>(size);
   const container = new Uint8Array(size);
 
   let parent: Int32Array;
@@ -40,22 +39,30 @@ export function buildSearchIndex(nodes: TreeNode[], parentIdx?: Int32Array): Sea
 
   for (let i = 0; i < size; i++) {
     const n = nodes[i];
-    const key = n.key;
-    keys[i] = key;
-    keysLower[i] = key.toLowerCase();
+    keys[i] = n.key;
     if (n.isContainer) {
       container[i] = 1;
       vals[i] = "";
-      valsLower[i] = "";
     } else {
-      const raw = n.value === null ? "null" : String(n.value);
-      vals[i] = raw;
-      valsLower[i] = raw.toLowerCase();
+      vals[i] = n.value === null ? "null" : String(n.value);
     }
   }
 
-  return { size, keys, keysLower, vals, valsLower, parent, container };
+  return { size, keys, keysLower: null, vals, valsLower: null, parent, container };
 }
+
+function lowerAll(src: string[]): string[] {
+  const out = new Array<string>(src.length);
+  for (let i = 0; i < src.length; i++) out[i] = src[i].toLowerCase();
+  return out;
+}
+
+/** Build the lowercase columns on demand (main-thread fallback path only). */
+export function ensureLower(index: SearchIndex) {
+  if (!index.keysLower) index.keysLower = lowerAll(index.keys);
+  if (!index.valsLower) index.valsLower = lowerAll(index.vals);
+}
+
 
 
 export interface ScanOptions {

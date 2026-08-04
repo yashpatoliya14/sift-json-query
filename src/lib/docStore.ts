@@ -1,5 +1,6 @@
 import { buildTree, computeStats, visibleRows } from "./flattenTree";
 import { looksLikeMongo, parseMongo, runMongo, toSqlWhere } from "./mongoSearch";
+import { initWorkerIndex, resetWorkerIndex, scanInWorker, workerAvailable } from "./searchClient";
 import { buildSearchIndex, expandAncestors, scanIndex, type ScanOptions, type SearchIndex } from "./searchIndex";
 import type { JsonStats, JsonValue, TreeNode } from "./types";
 
@@ -37,9 +38,9 @@ export interface DocState {
 const EMPTY_INDEX: SearchIndex = {
   size: 0,
   keys: [],
-  keysLower: [],
+  keysLower: null,
   vals: [],
-  valsLower: [],
+  valsLower: null,
   parent: new Int32Array(0),
   container: new Uint8Array(0),
 };

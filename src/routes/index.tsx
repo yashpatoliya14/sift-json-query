@@ -72,7 +72,7 @@ function Sift() {
 
   // Debounced search — the scan itself is a few ms even on 100k nodes.
   useEffect(() => {
-    const id = setTimeout(() => runSearch(query, { scope, caseSensitive, regex }), 90);
+    const id = setTimeout(() => void runSearch(query, { scope, caseSensitive, regex }), 90);
     return () => clearTimeout(id);
   }, [query, scope, caseSensitive, regex]);
 

@@ -1,3 +1,7 @@
+import { useState } from "react";
+
+import { CopyIcon } from "@/components/icons";
+import { copyText } from "@/lib/jsonTools";
 import { cn } from "@/lib/utils";
 
 export interface LedgerItem {
@@ -17,6 +21,14 @@ interface Props {
 }
 
 export function MatchLedger({ items, total, activeIndex, onSelect, hasQuery }: Props) {
+  const [copied, setCopied] = useState<string | null>(null);
+
+  const copyPair = async (item: LedgerItem) => {
+    await copyText(`${item.key}: ${item.preview}`);
+    setCopied(item.path);
+    setTimeout(() => setCopied((p) => (p === item.path ? null : p)), 1200);
+  };
+
   return (
     <section className="flex min-h-0 flex-1 flex-col">
       <div className="flex items-center justify-between px-3 py-2">
@@ -35,12 +47,12 @@ export function MatchLedger({ items, total, activeIndex, onSelect, hasQuery }: P
         )}
         <ul>
           {items.map((item) => (
-            <li key={item.path}>
+            <li key={item.path} className="group relative">
               <button
                 type="button"
                 onClick={() => onSelect(item.index)}
                 className={cn(
-                  "block w-full border-b border-border px-3 py-1.5 text-left font-mono text-[11px] transition-colors",
+                  "block w-full border-b border-border px-3 py-1.5 pr-9 text-left font-mono text-[11px] transition-colors",
                   item.index === activeIndex
                     ? "bg-[color-mix(in_oklab,var(--mark)_16%,transparent)]"
                     : "hover:bg-panel-raised",
@@ -51,6 +63,21 @@ export function MatchLedger({ items, total, activeIndex, onSelect, hasQuery }: P
                   <span className="text-brass">{item.key}</span>
                   <span className="truncate text-t-string">{item.preview}</span>
                 </span>
+              </button>
+
+              <button
+                type="button"
+                onClick={() => void copyPair(item)}
+                aria-label={`Copy ${item.key} value`}
+                title="Copy key: value"
+                className={cn(
+                  "absolute right-2 top-1/2 -translate-y-1/2 rounded border border-border bg-panel-raised px-1.5 py-1",
+                  "font-mono text-[10px] text-muted-foreground opacity-0 transition-opacity",
+                  "hover:text-brass focus-visible:opacity-100 group-hover:opacity-100",
+                  copied === item.path && "opacity-100 text-brass",
+                )}
+              >
+                {copied === item.path ? "ok" : <CopyIcon className="h-3 w-3" />}
               </button>
             </li>
           ))}

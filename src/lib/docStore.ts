@@ -1,5 +1,6 @@
 import { buildTree, computeStats, visibleRows } from "./flattenTree";
 import { looksLikeMongo, parseMongo, runMongo, toSqlWhere } from "./mongoSearch";
+import { initWorkerIndex, resetWorkerIndex, scanInWorker, workerAvailable } from "./searchClient";
 import { buildSearchIndex, expandAncestors, scanIndex, type ScanOptions, type SearchIndex } from "./searchIndex";
 import type { JsonStats, JsonValue, TreeNode } from "./types";
 
@@ -37,9 +38,9 @@ export interface DocState {
 const EMPTY_INDEX: SearchIndex = {
   size: 0,
   keys: [],
-  keysLower: [],
+  keysLower: null,
   vals: [],
-  valsLower: [],
+  valsLower: null,
   parent: new Int32Array(0),
   container: new Uint8Array(0),
 };
@@ -188,6 +189,7 @@ export async function loadDocument(raw: string, sizeHint?: number) {
   state.loadMs = performance.now() - started;
   cache = null;
   docVersion += 1;
+  initWorkerIndex(docVersion, index);
   recomputeRows();
   commit();
 }
@@ -212,6 +214,7 @@ export function clearDocument() {
   state.loadMs = 0;
   cache = null;
   docVersion += 1;
+  resetWorkerIndex();
   commit();
 }
 
@@ -231,9 +234,12 @@ function setHits(hits: Int32Array, truncated: boolean) {
   recomputeRows();
 }
 
-export function runSearch(query: string, opts: ScanOptions) {
+let searchToken = 0;
+
+export async function runSearch(query: string, opts: ScanOptions) {
   if (state.nodes.length === 0) return;
   const started = performance.now();
+  const token = ++searchToken;
 
   if (!query.trim()) {
     cache = null;
@@ -264,6 +270,21 @@ export function runSearch(query: string, opts: ScanOptions) {
     return;
   }
 
+  // Off-thread scan: the worker owns the string columns and the narrowing cache.
+  if (workerAvailable()) {
+    const res = await scanInWorker(docVersion, query, opts);
+    if (token !== searchToken) return; // a newer keystroke already won
+    if (res) {
+      state.error = res.error ? `Invalid pattern — ${res.error}` : null;
+      state.translated = null;
+      setHits(res.error ? new Int32Array(0) : res.hits, res.truncated);
+      state.ms = performance.now() - started;
+      commit();
+      return;
+    }
+    // worker unavailable / stale index → fall through to the main-thread scan
+  }
+
   try {
     const key = `${opts.scope}|${opts.caseSensitive}|${opts.regex}`;
     const canNarrow =
@@ -280,6 +301,7 @@ export function runSearch(query: string, opts: ScanOptions) {
       opts,
       canNarrow && cache ? cache.hits : undefined,
     );
+    if (token !== searchToken) return;
     cache = { query, key, hits: indices, truncated };
     state.error = null;
     state.translated = null;

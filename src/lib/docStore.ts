@@ -189,6 +189,7 @@ export async function loadDocument(raw: string, sizeHint?: number) {
   state.loadMs = performance.now() - started;
   cache = null;
   docVersion += 1;
+  initWorkerIndex(docVersion, index);
   recomputeRows();
   commit();
 }

@@ -1,5 +1,7 @@
 import { useRef, useState } from "react";
 import { UploadIcon } from "@/components/icons";
+import { beginLoad, failLoad } from "@/lib/docStore";
+import { MAX_TEXT_BYTES, formatBytes, readFileText } from "@/lib/readFile";
 import { cn } from "@/lib/utils";
 
 interface Props {
@@ -8,6 +10,7 @@ interface Props {
   onApply: (text: string, bytes?: number) => void;
   onClear: () => void;
   onSample: () => void;
+  onFileMeta?: (meta: { name: string; size: number } | null) => void;
   error: string | null;
   loading?: { phase: string; pct: number } | null;
   loadMs?: number;
@@ -17,18 +20,13 @@ interface Props {
  *  <textarea> is the single slowest thing you can do to the main thread. */
 const EDITOR_LIMIT = 512 * 1024;
 
-function formatBytes(n: number) {
-  if (n < 1024) return `${n} B`;
-  if (n < 1024 * 1024) return `${(n / 1024).toFixed(1)} KB`;
-  return `${(n / (1024 * 1024)).toFixed(1)} MB`;
-}
-
 export function SourceControls({
   text,
   onTextChange,
   onApply,
   onClear,
   onSample,
+  onFileMeta,
   error,
   loading,
   loadMs,
@@ -38,8 +36,22 @@ export function SourceControls({
   const [bigFile, setBigFile] = useState<{ name: string; size: number } | null>(null);
 
   const readFile = async (file: File) => {
-    // file.text() streams off-thread and skips FileReader's event plumbing.
-    const content = await file.text();
+    onFileMeta?.({ name: file.name, size: file.size });
+    if (file.size > MAX_TEXT_BYTES) {
+      onFileMeta?.(null);
+      failLoad(
+        `${file.name} is ${formatBytes(file.size)} — browsers cap a single JSON string near ${formatBytes(
+          MAX_TEXT_BYTES,
+        )}. Split it or query a slice.`,
+      );
+      return;
+    }
+
+    beginLoad("reading file", 2);
+    // Streams off-thread and reports progress while the bytes arrive.
+    const content = await readFileText(file, (fraction) =>
+      beginLoad(`reading file ${Math.round(fraction * 100)}%`, 2 + fraction * 25),
+    );
     if (file.size > EDITOR_LIMIT) {
       setBigFile({ name: file.name, size: file.size });
       onTextChange("");
@@ -48,7 +60,9 @@ export function SourceControls({
       onTextChange(content);
     }
     onApply(content, file.size);
+    onFileMeta?.(null);
   };
+
 
 
   return (

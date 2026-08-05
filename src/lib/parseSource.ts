@@ -48,6 +48,9 @@ export function detectFormat(raw: string): SourceFormat {
 
   if (head.startsWith("<?xml") || head.startsWith("<!DOCTYPE") || /^<[A-Za-z_]/.test(head)) return "xml";
 
+  // A bare `[table]` line is TOML, not a JSON array.
+  if (/^\[[A-Za-z_][\w.\- ]*\]\s*(\n|$)/.test(head)) return "toml";
+
   if (head.startsWith("{") || head.startsWith("[")) {
     // Several top-level objects separated by newlines => NDJSON.
     if (/^\s*\{[\s\S]*?\}\s*\n\s*\{/.test(head)) return "ndjson";

@@ -2,6 +2,7 @@ import { buildTree, computeStats, visibleRows } from "./flattenTree";
 import { looksLikeMongo, parseMongo, runMongo, toSqlWhere } from "./mongoSearch";
 import { initWorkerIndex, resetWorkerIndex, scanInWorker, workerAvailable } from "./searchClient";
 import { buildSearchIndex, expandAncestors, scanIndex, type ScanOptions, type SearchIndex } from "./searchIndex";
+import { FORMAT_LABEL, parseSource, type SourceFormat } from "./parseSource";
 import type { JsonStats, JsonValue, TreeNode } from "./types";
 
 
@@ -28,6 +29,8 @@ export interface DocState {
   error: string | null;
   translated: string | null;
   parseError: string | null;
+  /** Interchange format the current document was parsed from. */
+  format: SourceFormat | null;
   bytes: number;
   /** Non-null while a document is being ingested. */
   loading: { phase: string; pct: number } | null;
@@ -60,6 +63,7 @@ const state: DocState = {
   error: null,
   translated: null,
   parseError: null,
+  format: null,
   bytes: 0,
   loading: null,
   loadMs: 0,
@@ -132,7 +136,7 @@ export function failLoad(message: string) {
  * Ingest a document in phases, yielding between each so the UI stays live and
  * shows progress. Each phase is a tight, allocation-light pass.
  */
-export async function loadDocument(raw: string, sizeHint?: number) {
+export async function loadDocument(raw: string, sizeHint?: number, formatHint?: SourceFormat | null) {
   if (!raw.trim()) {
     state.parseError = "Nothing to parse yet.";
     state.loading = null;
@@ -150,15 +154,19 @@ export async function loadDocument(raw: string, sizeHint?: number) {
   if (stale()) return;
 
   let parsed: JsonValue;
+  let format: SourceFormat;
   try {
-    parsed = JSON.parse(raw) as JsonValue;
+    const res = parseSource(raw, formatHint);
+    parsed = res.value;
+    format = res.format;
   } catch (e) {
     if (stale()) return;
-    state.parseError = `Invalid JSON — ${(e as Error).message}`;
+    state.parseError = (e as Error).message;
     state.loading = null;
     commit();
     return;
   }
+  setPhase(`parsed ${FORMAT_LABEL[format]}`, 30);
 
   // Byte count: exact for modest payloads, cheap estimate for huge ones.
   const bytes = sizeHint ?? (raw.length > 8_000_000 ? raw.length : new Blob([raw]).size);
@@ -186,6 +194,7 @@ export async function loadDocument(raw: string, sizeHint?: number) {
   }
 
   state.doc = parsed;
+  state.format = format;
   state.nodes = nodes;
   state.index = index;
   state.bytes = bytes;
@@ -223,6 +232,7 @@ export function clearDocument() {
   state.error = null;
   state.translated = null;
   state.parseError = null;
+  state.format = null;
   state.bytes = 0;
   state.loading = null;
   state.loadMs = 0;

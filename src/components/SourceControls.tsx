@@ -1,19 +1,21 @@
 import { useRef, useState } from "react";
 import { UploadIcon } from "@/components/icons";
 import { beginLoad, failLoad } from "@/lib/docStore";
+import { ACCEPTED_EXTENSIONS, FORMAT_LABEL, formatFromFileName, type SourceFormat } from "@/lib/parseSource";
 import { MAX_TEXT_BYTES, formatBytes, readFileText } from "@/lib/readFile";
 import { cn } from "@/lib/utils";
 
 interface Props {
   text: string;
   onTextChange: (text: string) => void;
-  onApply: (text: string, bytes?: number) => void;
+  onApply: (text: string, bytes?: number, format?: SourceFormat | null) => void;
   onClear: () => void;
   onSample: () => void;
   onFileMeta?: (meta: { name: string; size: number } | null) => void;
   error: string | null;
   loading?: { phase: string; pct: number } | null;
   loadMs?: number;
+  format?: SourceFormat | null;
 }
 
 /** Above this, the raw text never enters the textarea — a multi-MB controlled
@@ -30,6 +32,7 @@ export function SourceControls({
   error,
   loading,
   loadMs,
+  format,
 }: Props) {
   const fileRef = useRef<HTMLInputElement>(null);
   const [dragging, setDragging] = useState(false);
@@ -40,7 +43,7 @@ export function SourceControls({
     if (file.size > MAX_TEXT_BYTES) {
       onFileMeta?.(null);
       failLoad(
-        `${file.name} is ${formatBytes(file.size)} — browsers cap a single JSON string near ${formatBytes(
+        `${file.name} is ${formatBytes(file.size)} — browsers cap a single text document near ${formatBytes(
           MAX_TEXT_BYTES,
         )}. Split it or query a slice.`,
       );
@@ -59,7 +62,7 @@ export function SourceControls({
       setBigFile(null);
       onTextChange(content);
     }
-    onApply(content, file.size);
+    onApply(content, file.size, formatFromFileName(file.name));
     onFileMeta?.(null);
   };
 
@@ -68,7 +71,7 @@ export function SourceControls({
   return (
     <section className="flex min-h-0 flex-col border-b border-border">
       <div className="flex items-center justify-between px-3 py-2">
-        <h2 className="eyebrow">source</h2>
+        <h2 className="eyebrow">source{format ? ` · ${FORMAT_LABEL[format]}` : ""}</h2>
         <div className="flex items-center gap-1">
           <SmallButton onClick={onSample}>sample</SmallButton>
           <SmallButton onClick={() => fileRef.current?.click()}>
@@ -81,7 +84,7 @@ export function SourceControls({
       <input
         ref={fileRef}
         type="file"
-        accept=".json,.txt,application/json,text/plain"
+        accept={ACCEPTED_EXTENSIONS}
         className="sr-only"
         onChange={(e) => {
           const file = e.target.files?.[0];
@@ -122,7 +125,7 @@ export function SourceControls({
           <textarea
             value={text}
             spellCheck={false}
-            placeholder={'{ "paste": "your JSON here" }'}
+            placeholder={'paste JSON, XML, YAML, TOML, CSV/TSV or NDJSON here'}
             onChange={(e) => onTextChange(e.target.value)}
             onPaste={(e) => {
               const pasted = e.clipboardData.getData("text");

@@ -28,6 +28,7 @@ import {
 } from "@/lib/docStore";
 import { cn } from "@/lib/utils";
 import type { MatchQuery, RowData } from "@/components/VirtualRow";
+import type { SourceFormat } from "@/lib/parseSource";
 import type { SearchScope } from "@/lib/types";
 
 export const Route = createFileRoute("/")({
@@ -141,8 +142,8 @@ function Sift() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [version, tab]);
 
-  const applyText = useCallback((raw: string, bytes?: number) => {
-    void loadDocument(raw, bytes);
+  const applyText = useCallback((raw: string, bytes?: number, format?: SourceFormat | null) => {
+    void loadDocument(raw, bytes, format);
   }, []);
 
   const loadSample = () => {
@@ -183,6 +184,7 @@ function Sift() {
             error={store.parseError}
             loading={store.loading}
             loadMs={store.loadMs}
+            format={store.format}
           />
           <MatchLedger
             items={ledgerItems}

@@ -169,3 +169,17 @@
     transition-duration: 0.01ms !important;
   }
 }
+
+/* Pointer affordance on every interactive control */
+button:not(:disabled),
+[role="button"]:not([aria-disabled="true"]),
+summary,
+label[for],
+select:not(:disabled) {
+  cursor: pointer;
+}
+
+button:disabled,
+[aria-disabled="true"] {
+  cursor: not-allowed;
+}

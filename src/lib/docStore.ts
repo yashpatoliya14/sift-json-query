@@ -114,6 +114,20 @@ function setPhase(phase: string, pct: number) {
   commit();
 }
 
+/** Drive the loading curtain from outside (file reading happens in the UI). */
+export function beginLoad(phase: string, pct: number) {
+  state.parseError = null;
+  setPhase(phase, pct);
+}
+
+export function failLoad(message: string) {
+  loadToken++;
+  state.loading = null;
+  state.parseError = message;
+  commit();
+}
+
+
 /**
  * Ingest a document in phases, yielding between each so the UI stays live and
  * shows progress. Each phase is a tight, allocation-light pass.

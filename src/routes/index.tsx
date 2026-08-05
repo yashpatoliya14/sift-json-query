@@ -3,6 +3,7 @@ import { createFileRoute } from "@tanstack/react-router";
 import type { ListImperativeAPI } from "react-window";
 
 import { Header } from "@/components/Header";
+import { LoadingOverlay } from "@/components/LoadingOverlay";
 import { MatchLedger, type LedgerItem } from "@/components/MatchLedger";
 import { SearchControls } from "@/components/SearchControls";
 import { SourceControls } from "@/components/SourceControls";
@@ -65,6 +66,7 @@ function Sift() {
   const [regex, setRegex] = useState(false);
   const [copiedPath, setCopiedPath] = useState<string | null>(null);
   const [tab, setTab] = useState<"tree" | "sql">("tree");
+  const [fileMeta, setFileMeta] = useState<{ name: string; size: number } | null>(null);
 
   const listRef = useRef<ListImperativeAPI>(null);
 
@@ -159,6 +161,14 @@ function Sift() {
 
   return (
     <div className="flex h-screen flex-col overflow-hidden bg-background">
+      {store.loading && (
+        <LoadingOverlay
+          phase={store.loading.phase}
+          pct={store.loading.pct}
+          fileName={fileMeta?.name}
+          fileSize={fileMeta?.size}
+        />
+      )}
       <Header nodeCount={store.stats.nodes} matchCount={hitCount} hasQuery={!!trimmed} />
 
       <main className="flex min-h-0 flex-1 flex-col lg:flex-row">
@@ -169,6 +179,7 @@ function Sift() {
             onApply={applyText}
             onClear={clearAll}
             onSample={loadSample}
+            onFileMeta={setFileMeta}
             error={store.parseError}
             loading={store.loading}
             loadMs={store.loadMs}
